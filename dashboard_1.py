@@ -26,6 +26,12 @@ def load_data():
 
         intake_data = pd.read_csv(intake_file)
 
+        # Filter out experiment 4 data
+        intake_data = intake_data[~intake_data['experiment'].str.contains('4', case=False, na=False)]
+
+        # Filter out weeks 48, 49, and 50
+        intake_data = intake_data[~intake_data['week'].isin([48, 49, 50])]
+
         # Load climate data
         climate_file = Path("output_combined_filtered/combined_weekly_climate_averages.csv")
         if not climate_file.exists():
@@ -33,6 +39,12 @@ def load_data():
             return intake_data, None
 
         climate_data = pd.read_csv(climate_file)
+
+        # Filter out experiment 4 data from climate data as well
+        climate_data = climate_data[~climate_data['experiment'].str.contains('4', case=False, na=False)]
+
+        # Filter out weeks 48, 49, and 50 from climate data
+        climate_data = climate_data[~climate_data['week'].isin([48, 49, 50])]
 
         return intake_data, climate_data
 
@@ -65,62 +77,6 @@ def merge_climate_intake_data(intake_data, climate_data):
     )
 
     return merged_data
-
-
-def create_feeding_climate_plot(data, climate_type, feeding_metric='total_weekly_intake'):
-    """Create scatter plot for climate parameter vs feeding metric."""
-    if climate_type not in data.columns or feeding_metric not in data.columns:
-        return None
-
-    # Remove rows with missing data
-    plot_data = data.dropna(subset=[climate_type, feeding_metric])
-
-    if len(plot_data) == 0:
-        return None
-
-    # Create scatter plot
-    fig = px.scatter(
-        plot_data,
-        x=climate_type,
-        y=feeding_metric,
-        color='experiment',
-        size='feeding_sessions',
-        title=f'{climate_type} vs {feeding_metric.replace("_", " ").title()}',
-        labels={
-            climate_type: f'{climate_type}',
-            feeding_metric: feeding_metric.replace('_', ' ').title(),
-            'experiment': 'Experiment'
-        },
-        hover_data=['pig_id', 'week_year', 'feeding_sessions']
-    )
-
-    # Calculate correlation and add trend line
-    try:
-        correlation = plot_data[climate_type].corr(plot_data[feeding_metric])
-
-        # Add trend line
-        z = np.polyfit(plot_data[climate_type], plot_data[feeding_metric], 1)
-        p = np.poly1d(z)
-        x_trend = np.linspace(plot_data[climate_type].min(), plot_data[climate_type].max(), 100)
-
-        fig.add_trace(go.Scatter(
-            x=x_trend,
-            y=p(x_trend),
-            mode='lines',
-            name=f'Trend (r={correlation:.3f})',
-            line=dict(dash='dash', color='red')
-        ))
-
-        # Update title with correlation
-        fig.update_layout(
-            title=f'{climate_type} vs {feeding_metric.replace("_", " ").title()} (r={correlation:.3f})',
-            showlegend=True
-        )
-
-    except Exception as e:
-        st.warning(f"Could not add trend line for {climate_type}: {e}")
-
-    return fig
 
 
 def create_feeding_behavior_heatmap(data, climate_types):
@@ -242,7 +198,7 @@ def create_feeding_distribution_by_climate(data, climate_type):
     q33, q66 = climate_values.quantile([0.33, 0.67])
 
     data_copy = data.copy()
-    # Create categorical data - pd.cut doesn't have 'observed' parameter
+    # Create categorical data
     data_copy['climate_category'] = pd.cut(
         data_copy[climate_type],
         bins=[-np.inf, q33, q66, np.inf],
@@ -291,9 +247,9 @@ def create_climate_threshold_analysis(data, climate_type):
     if len(climate_data) < 20:
         return None, None
 
-    # Create bins and calculate means - FIX: Add observed=True to groupby only
+    # Create bins and calculate means
     n_bins = 10
-    climate_data = climate_data.copy()  # Create a copy to avoid SettingWithCopyWarning
+    climate_data = climate_data.copy()
     climate_data['climate_bin'] = pd.cut(climate_data[climate_type], bins=n_bins)
 
     bin_stats = climate_data.groupby('climate_bin', observed=True).agg({
@@ -401,59 +357,6 @@ def create_climate_threshold_analysis(data, climate_type):
         return fig, threshold_info
 
     return fig, None
-
-
-def create_multi_climate_3d_plot(data, climate_types):
-    """Create 3D plot showing interaction between two climate parameters and feeding."""
-    if len(climate_types) < 2:
-        return None
-
-    # Select two most correlated climate parameters
-    correlations = {}
-    for climate in climate_types:
-        if climate in data.columns and 'total_weekly_intake' in data.columns:
-            corr = data[climate].corr(data['total_weekly_intake'])
-            if not np.isnan(corr):
-                correlations[climate] = abs(corr)
-
-    if len(correlations) < 2:
-        return None
-
-    # Get top 2 climate parameters
-    sorted_climates = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
-    climate1, climate2 = sorted_climates[0][0], sorted_climates[1][0]
-
-    # Create 3D scatter plot
-    fig = go.Figure(data=[go.Scatter3d(
-        x=data[climate1],
-        y=data[climate2],
-        z=data['total_weekly_intake'],
-        mode='markers',
-        marker=dict(
-            size=5,
-            color=data['total_weekly_intake'],
-            colorscale='Viridis',
-            opacity=0.7,
-            colorbar=dict(title='Weekly Intake (kg)')
-        ),
-        text=data['experiment'],
-        hovertemplate=f'<b>{climate1}</b>: %{{x}}<br>' +
-                      f'<b>{climate2}</b>: %{{y}}<br>' +
-                      '<b>Weekly Intake</b>: %{z}<br>' +
-                      '<b>Experiment</b>: %{text}<extra></extra>'
-    )])
-
-    fig.update_layout(
-        title=f'3D Climate Interaction: {climate1} vs {climate2} vs Feeding',
-        scene=dict(
-            xaxis_title=climate1,
-            yaxis_title=climate2,
-            zaxis_title='Total Weekly Intake (kg)'
-        ),
-        height=600
-    )
-
-    return fig
 
 
 def create_optimal_climate_zones(data, climate_types):
@@ -618,25 +521,21 @@ def main():
     # Sidebar controls
     st.sidebar.header("Analysis Controls")
 
-    # Show data info
-    st.sidebar.subheader("Data Overview")
-    st.sidebar.write(f"Pigs: {intake_data['pig_id'].nunique()}")
-    st.sidebar.write(f"Experiments: {', '.join(intake_data['experiment'].unique())}")
-    st.sidebar.write(f"Weeks: {intake_data['week_year'].nunique()}")
+    # Filter to only use Exp2
+    experiments = ['Exp2']
 
-    # Filter by experiment
-    experiments = st.sidebar.multiselect(
-        "Select Experiments",
-        intake_data['experiment'].unique(),
-        default=intake_data['experiment'].unique()
-    )
+    # Filter data for overview stats
+    filtered_intake = intake_data[intake_data['experiment'].isin(experiments)]
+
+    # Show data info (filtered to selected experiments)
+    st.sidebar.subheader("Data Overview")
+    st.sidebar.write(f"Pigs: {filtered_intake['pig_id'].nunique()}")
+    st.sidebar.write(f"Experiments: {', '.join(filtered_intake['experiment'].unique())}")
+    st.sidebar.write(f"Weeks: {filtered_intake['week_year'].nunique()}")
 
     if not experiments:
         st.warning("Please select at least one experiment")
         st.stop()
-
-    # Filter data
-    filtered_intake = intake_data[intake_data['experiment'].isin(experiments)]
 
     if climate_data is not None:
         filtered_climate = climate_data[climate_data['experiment'].isin(experiments)]
@@ -656,16 +555,6 @@ def main():
             if climate_types:
                 st.sidebar.write(f"Climate types: {len(climate_types)}")
 
-                # Select feeding metric to analyze
-                feeding_metrics = ['total_weekly_intake', 'feeding_sessions', 'avg_intake_per_session']
-                available_feeding_metrics = [m for m in feeding_metrics if m in merged_data.columns]
-
-                selected_metric = st.sidebar.selectbox(
-                    "Primary Feeding Metric",
-                    available_feeding_metrics,
-                    index=0 if available_feeding_metrics else None
-                )
-
                 # Main analysis
                 st.header("Climate Effects on Feeding Behavior")
 
@@ -681,33 +570,12 @@ def main():
                 if time_series_fig:
                     st.plotly_chart(time_series_fig, use_container_width=True)
 
-                # Individual climate effects
-                st.subheader(f"Individual Climate Effects on {selected_metric.replace('_', ' ').title()}")
-
-                # Create plots in a grid
-                cols_per_row = 2
-                rows_needed = (len(climate_types) + cols_per_row - 1) // cols_per_row
-
-                for row in range(rows_needed):
-                    cols = st.columns(cols_per_row)
-
-                    for col_idx in range(cols_per_row):
-                        climate_idx = row * cols_per_row + col_idx
-                        if climate_idx < len(climate_types):
-                            climate_type = climate_types[climate_idx]
-
-                            with cols[col_idx]:
-                                fig = create_feeding_climate_plot(merged_data, climate_type, selected_metric)
-                                if fig:
-                                    st.plotly_chart(fig, use_container_width=True)
-
                 # Advanced Analysis Tabs
                 st.subheader("Advanced Climate-Feeding Analysis")
 
-                tab1, tab2, tab3, tab4 = st.tabs([
+                tab1, tab2, tab3 = st.tabs([
                     "📊 Distribution Analysis",
                     "🎯 Threshold Detection",
-                    "🌍 3D Interactions",
                     "⭐ Optimal Zones"
                 ])
 
@@ -733,8 +601,6 @@ def main():
                             - Low: < {q33:.2f}
                             - Medium: {q33:.2f} - {q66:.2f}
                             - High: > {q66:.2f}
-
-                            Compare the feeding behavior distributions to see how {selected_climate} affects pig feeding patterns.
                             """)
 
                 with tab2:
@@ -769,60 +635,210 @@ def main():
                                         f"📉 Feeding decreases most rapidly around {threshold_info['critical_threshold']:.2f}")
 
                 with tab3:
-                    st.markdown("**Multi-Climate Interactions**")
-                    if len(climate_types) >= 2:
-                        interaction_fig = create_multi_climate_3d_plot(merged_data, climate_types)
-                        if interaction_fig:
-                            st.plotly_chart(interaction_fig, use_container_width=True)
-                            st.info(
-                                "🔄 Rotate and zoom the 3D plot to explore how combinations of climate factors affect feeding!")
-                        else:
-                            st.warning("Unable to create 3D interaction plot")
-                    else:
-                        st.warning("Need at least 2 climate parameters for interaction analysis")
-
-                with tab4:
                     st.markdown("**Optimal Climate Conditions**")
                     if len(climate_types) >= 2:
                         try:
-                            optimal_fig, zone_stats = create_optimal_climate_zones(merged_data, climate_types)
-                            if optimal_fig and zone_stats:
-                                st.plotly_chart(optimal_fig, use_container_width=True)
+                            # Calculate feeding efficiency for all combinations
+                            data_copy = merged_data.copy()
 
-                                # Display optimal ranges
-                                st.markdown("**🎯 Optimal Climate Ranges:**")
-                                col1, col2, col3 = st.columns(3)
+                            # Check if required columns exist
+                            required_cols = ['total_weekly_intake', 'feeding_sessions', 'avg_intake_per_session']
+                            missing_cols = [col for col in required_cols if col not in data_copy.columns]
 
-                                climate_names = list(zone_stats['optimal_ranges'].keys())
-                                with col1:
-                                    st.metric(
-                                        climate_names[0],
-                                        zone_stats['optimal_ranges'][climate_names[0]]
-                                    )
-                                with col2:
-                                    st.metric(
-                                        climate_names[1],
-                                        zone_stats['optimal_ranges'][climate_names[1]]
-                                    )
-                                with col3:
-                                    st.metric(
-                                        "Performance Gap",
-                                        f"{zone_stats['improvement_potential']:.1f}%",
-                                        help="Potential improvement from optimal vs poor conditions"
-                                    )
-
-                                st.success(f"""
-                                **Key Insights:**
-                                - Optimal feeding performance: {zone_stats['optimal_avg_intake']:.2f} kg/week
-                                - Poor performance: {zone_stats['poor_avg_intake']:.2f} kg/week
-                                - **Potential improvement: {zone_stats['improvement_potential']:.1f}%** by maintaining optimal climate conditions
-                                """)
-                            elif optimal_fig:
-                                st.plotly_chart(optimal_fig, use_container_width=True)
-                                st.info("Optimal zone visualization created, but statistics unavailable")
+                            if missing_cols:
+                                st.warning(f"Missing columns for optimal zone analysis: {missing_cols}")
                             else:
-                                st.warning(
-                                    "Unable to create optimal zones analysis. This may be due to insufficient data or missing columns.")
+                                # Data quality filters based on actual data analysis
+                                initial_count = len(data_copy)
+
+                                # Remove outliers based on your actual data percentiles
+                                data_copy = data_copy[
+                                    (data_copy['total_weekly_intake'] >= 3.0) &  # Above 1st percentile
+                                    (data_copy['total_weekly_intake'] <= 32.0) &  # Below 99th percentile
+                                    (data_copy['feeding_sessions'] >= 25) &  # Above 1st percentile
+                                    (data_copy['feeding_sessions'] <= 450) &  # Below 99th percentile
+                                    (data_copy['avg_intake_per_session'] >= 0.025) &  # Above 1st percentile
+                                    (data_copy['avg_intake_per_session'] <= 0.45)  # Below 99th percentile
+                                    ]
+
+                                filtered_count = len(data_copy)
+
+                                if len(data_copy) >= 10:
+                                    # Improved feeding efficiency calculation - normalize all components to 0-1 scale
+                                    # Normalize each component to 0-1 scale for fair weighting
+                                    intake_norm = (data_copy['total_weekly_intake'] - data_copy[
+                                        'total_weekly_intake'].min()) / \
+                                                  (data_copy['total_weekly_intake'].max() - data_copy[
+                                                      'total_weekly_intake'].min())
+
+                                    avg_session_norm = (data_copy['avg_intake_per_session'] - data_copy[
+                                        'avg_intake_per_session'].min()) / \
+                                                       (data_copy['avg_intake_per_session'].max() - data_copy[
+                                                           'avg_intake_per_session'].min())
+
+                                    # For feeding sessions, fewer sessions with same intake is more efficient
+                                    # So we invert and normalize: prefer fewer but larger meals
+                                    sessions_inverted = 1 / data_copy['feeding_sessions']
+                                    sessions_norm = (sessions_inverted - sessions_inverted.min()) / \
+                                                    (sessions_inverted.max() - sessions_inverted.min())
+
+                                    # Weighted combination with more emphasis on total intake
+                                    data_copy['feeding_efficiency'] = (
+                                            intake_norm * 0.6 +  # 60% weight on total intake
+                                            avg_session_norm * 0.3 +  # 30% weight on intake per session
+                                            sessions_norm * 0.1  # 10% weight on session efficiency
+                                    )
+
+                                    # Use more conservative percentiles to avoid extreme outliers
+                                    top_20_pct = data_copy['feeding_efficiency'].quantile(0.8)  # Top 20% instead of 10%
+                                    bottom_20_pct = data_copy['feeding_efficiency'].quantile(
+                                        0.2)  # Bottom 20% instead of 10%
+
+                                    optimal_data = data_copy[data_copy['feeding_efficiency'] >= top_20_pct]
+                                    poor_data = data_copy[data_copy['feeding_efficiency'] <= bottom_20_pct]
+
+                                    # Create all possible combinations of climate parameters
+                                    from itertools import combinations
+                                    climate_combinations = list(combinations(climate_types, 2))
+
+                                    st.markdown(
+                                        f"**🎯 Optimal Climate Zones for All Parameter Combinations ({len(climate_combinations)} plots):**")
+
+                                    # Calculate overall optimal ranges for summary
+                                    optimal_ranges = {}
+                                    for climate in climate_types:
+                                        if climate in optimal_data.columns:
+                                            optimal_ranges[
+                                                climate] = f"{optimal_data[climate].min():.2f} - {optimal_data[climate].max():.2f}"
+
+                                    # Display overall optimal ranges
+                                    st.markdown("**📋 Optimal Ranges Summary:**")
+                                    cols = st.columns(len(climate_types))
+                                    for i, climate in enumerate(climate_types):
+                                        if climate in optimal_ranges:
+                                            with cols[i]:
+                                                st.metric(climate, optimal_ranges[climate])
+
+                                    # Performance metrics with median for robustness
+                                    optimal_intake_median = optimal_data['total_weekly_intake'].median()
+                                    poor_intake_median = poor_data['total_weekly_intake'].median()
+
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric(
+                                            "Optimal Performance (Median)",
+                                            f"{optimal_intake_median:.2f} kg/week"
+                                        )
+                                    with col2:
+                                        st.metric(
+                                            "Poor Performance (Median)",
+                                            f"{poor_intake_median:.2f} kg/week"
+                                        )
+                                    with col3:
+                                        realistic_improvement = ((optimal_intake_median - poor_intake_median) /
+                                                                 poor_intake_median * 100)
+                                        st.metric(
+                                            "Realistic Performance Gap",
+                                            f"{realistic_improvement:.1f}%",
+                                            help="Improvement potential using median values (more robust than mean)"
+                                        )
+
+                                    # Show data quality info
+                                    with st.expander("📊 Performance Analysis Details"):
+                                        col1, col2 = st.columns(2)
+                                        with col1:
+                                            st.write("**Optimal Performers (Top 20%):**")
+                                            st.write(f"- Count: {len(optimal_data)} records")
+                                            st.write(
+                                                f"- Intake range: {optimal_data['total_weekly_intake'].min():.1f} - {optimal_data['total_weekly_intake'].max():.1f} kg/week")
+                                            st.write(
+                                                f"- Sessions range: {optimal_data['feeding_sessions'].min():.0f} - {optimal_data['feeding_sessions'].max():.0f} per week")
+
+                                        with col2:
+                                            st.write("**Poor Performers (Bottom 20%):**")
+                                            st.write(f"- Count: {len(poor_data)} records")
+                                            st.write(
+                                                f"- Intake range: {poor_data['total_weekly_intake'].min():.1f} - {poor_data['total_weekly_intake'].max():.1f} kg/week")
+                                            st.write(
+                                                f"- Sessions range: {poor_data['feeding_sessions'].min():.0f} - {poor_data['feeding_sessions'].max():.0f} per week")
+
+                                    # Create plots for each combination
+                                    for i, (climate1, climate2) in enumerate(climate_combinations):
+                                        st.markdown(f"**{climate1} vs {climate2}**")
+
+                                        # Filter data for this combination
+                                        combo_optimal = optimal_data.dropna(subset=[climate1, climate2])
+                                        combo_poor = poor_data.dropna(subset=[climate1, climate2])
+
+                                        if len(combo_optimal) > 0 and len(combo_poor) > 0:
+                                            fig = go.Figure()
+
+                                            # Add optimal zones
+                                            fig.add_trace(go.Scatter(
+                                                x=combo_optimal[climate1],
+                                                y=combo_optimal[climate2],
+                                                mode='markers',
+                                                name='Optimal Feeding (Top 20%)',
+                                                marker=dict(color='green', size=8, symbol='circle')
+                                            ))
+
+                                            # Add poor performance zones
+                                            fig.add_trace(go.Scatter(
+                                                x=combo_poor[climate1],
+                                                y=combo_poor[climate2],
+                                                mode='markers',
+                                                name='Poor Feeding (Bottom 20%)',
+                                                marker=dict(color='red', size=8, symbol='x')
+                                            ))
+
+                                            # Add convex hull for optimal zone
+                                            try:
+                                                from scipy.spatial import ConvexHull
+                                                if len(combo_optimal) >= 3:
+                                                    optimal_points = combo_optimal[[climate1, climate2]].values
+                                                    hull = ConvexHull(optimal_points)
+
+                                                    # Create hull polygon
+                                                    hull_x = optimal_points[hull.vertices, 0]
+                                                    hull_y = optimal_points[hull.vertices, 1]
+                                                    hull_x = np.append(hull_x, hull_x[0])
+                                                    hull_y = np.append(hull_y, hull_y[0])
+
+                                                    fig.add_trace(go.Scatter(
+                                                        x=hull_x, y=hull_y,
+                                                        mode='lines',
+                                                        name='Optimal Zone Boundary',
+                                                        line=dict(color='green', dash='dash'),
+                                                        fill='toself',
+                                                        fillcolor='rgba(0,255,0,0.1)'
+                                                    ))
+                                            except ImportError:
+                                                if i == 0:  # Only show once
+                                                    st.info("Install scipy for optimal zone boundary visualization")
+                                            except Exception:
+                                                pass  # Silently skip boundary if not enough points
+
+                                            fig.update_layout(
+                                                title=f'Optimal Climate Zone: {climate1} vs {climate2}',
+                                                xaxis_title=climate1,
+                                                yaxis_title=climate2,
+                                                height=400,
+                                                showlegend=(i == 0)  # Only show legend for first plot
+                                            )
+
+                                            st.plotly_chart(fig, use_container_width=True)
+                                        else:
+                                            st.warning(f"Insufficient data for {climate1} vs {climate2} analysis")
+
+                                    # Overall insights with realistic gap
+                                    st.success(f"""
+                                    **🔍 Key Insights:**
+                                    - Optimal feeding performance: {optimal_intake_median:.2f} kg/week (median)
+                                    - Poor performance: {poor_intake_median:.2f} kg/week (median)
+                                    - Analysis based on top/bottom 20% performers after removing outliers
+                                    """)
+                                else:
+                                    st.warning("Insufficient data for optimal zone analysis after quality filtering")
                         except Exception as e:
                             st.error(f"Error in optimal zones analysis: {e}")
                             st.info(
@@ -830,35 +846,9 @@ def main():
                     else:
                         st.warning("Need at least 2 climate parameters for optimal zone analysis")
 
-                # Summary statistics
-                with st.expander("📊 Summary Statistics"):
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.subheader("Feeding Metrics")
-                        for metric in available_feeding_metrics:
-                            avg_val = merged_data[metric].mean()
-                            std_val = merged_data[metric].std()
-                            st.metric(
-                                metric.replace('_', ' ').title(),
-                                f"{avg_val:.3f}",
-                                f"±{std_val:.3f}"
-                            )
-
-                    with col2:
-                        st.subheader("Climate Ranges")
-                        for climate_type in climate_types:
-                            min_val = merged_data[climate_type].min()
-                            max_val = merged_data[climate_type].max()
-                            mean_val = merged_data[climate_type].mean()
-                            st.metric(
-                                climate_type,
-                                f"{mean_val:.2f}",
-                                f"{min_val:.2f} - {max_val:.2f}"
-                            )
 
                 # Data download
-                with st.expander("📥 Download Data"):
+                with st.expander("💾 Download Data"):
                     csv_data = merged_data.to_csv(index=False)
                     st.download_button(
                         label="Download Climate-Feeding Analysis Data",
